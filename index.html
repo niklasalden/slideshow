@@ -7,62 +7,42 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 16px system-ui, sans-serif; overflow: hidden; }
 
-  /* Bilderna fyller fönstret men behåller proportionerna (object-fit: contain) */
+  /* Bilderna täcker hela fönstret och behåller proportionerna; kanter beskärs vid behov */
   #stage img {
     position: fixed; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; opacity: 0; transition: opacity 2s;
+    object-fit: cover; opacity: 0; transition: opacity 1s;
   }
   #stage img.show { opacity: 1; }
-
   #stage img.zoom { transform: scale(1.1); transition: opacity 1s, transform 7s linear; }
 
-  #start {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 12px; padding: 16px;
-  }
-  #start input { width: min(400px, 100%); padding: 10px; font-size: 16px; }
-  #start button { padding: 10px 24px; font-size: 16px; cursor: pointer; }
-  #msg { color: #f88; min-height: 1.4em; text-align: center; }
+  #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; }
 </style>
 </head>
 <body>
 
 <div id="stage"><img id="a" alt=""><img id="b" alt=""></div>
-
-<form id="start">
-  <h1>Bildspel</h1>
-  <input id="url" placeholder="https://github.com/ägare/repo/tree/main/mapp" required>
-  <button>Starta</button>
-  <div id="msg"></div>
-</form>
+<div id="msg">Hämtar bilder…</div>
 
 <script>
-const SECONDS = 6;                                   // tid per bild
+// ---- Inställningar ----
+const REPO    = 'niklasalden/slideshow';   // GitHub-användare/repo
+const BRANCH  = 'main';
+const FOLDER  = 'images';                  // bildmappen bredvid index.html
+const SECONDS = 6;                         // tid per bild
+const REFRESH = 5;                         // kolla efter nya/borttagna bilder var 5:e minut
+
 const IMAGE = /\.(jpe?g|png|gif|webp|avif|svg)$/i;
+const msg = document.getElementById('msg');
 
-// Hämtar listan med bilder från en GitHub-mapp
-async function listGithub(link) {
-  const m = link.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/tree\/([^/]+)\/?(.*))?\/?$/);
-  if (!m) throw new Error('Det ser inte ut som en länk till en GitHub-mapp.');
-  const [, owner, repo, branch, path = ''] = m;
-  let api = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-  if (branch) api += `?ref=${encodeURIComponent(branch)}`;
-
-  const res = await fetch(api);
-  if (!res.ok) throw new Error(`GitHub svarade ${res.status}. Är repot publikt och länken rätt?`);
+// Hämtar listan med bilder i mappen från GitHub
+async function listImages() {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${FOLDER}?ref=${BRANCH}`);
+  if (!res.ok) throw new Error(`GitHub svarade ${res.status}`);
   const files = await res.json();
-  if (!Array.isArray(files)) throw new Error('Länken pekar på en fil, inte en mapp.');
-
-  return files
-    .filter(f => f.type === 'file' && IMAGE.test(f.name))
-    .sort((x, y) => x.name.localeCompare(y.name, 'sv', { numeric: true }))
-    .map(f => f.download_url);
+  return files.filter(f => f.type === 'file' && IMAGE.test(f.name)).map(f => f.download_url);
 }
 
-// Själva bildspelet: två bilder ovanpå varandra som tonas in/ut
-const layers = [document.getElementById('a'), document.getElementById('b')];
-let images = [], index = 0, front = 0;
-
+// Blandar listan i slumpmässig ordning
 function shuffle(list) {
   for (let i = list.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -70,9 +50,13 @@ function shuffle(list) {
   }
 }
 
-async function showNext() {
-  if (index === 0) shuffle(images);
+// Själva bildspelet: två bilder ovanpå varandra som tonas in/ut
+const layers = [document.getElementById('a'), document.getElementById('b')];
+let images = [], index = 0, front = 0;
 
+async function showNext() {
+  if (!images.length) { setTimeout(showNext, SECONDS * 1000); return; }
+  if (index === 0) shuffle(images);                  // ny slumpordning varje varv
   const src = images[index];
   index = (index + 1) % images.length;
   try {
@@ -90,19 +74,22 @@ async function showNext() {
   setTimeout(showNext, SECONDS * 1000);
 }
 
-document.getElementById('start').addEventListener('submit', async e => {
-  e.preventDefault();
-  const msg = document.getElementById('msg');
-  msg.textContent = 'Hämtar bilder…';
+// Läser in mappen på nytt; vid fel behålls de bilder vi redan har
+async function refresh() {
   try {
-    images = await listGithub(document.getElementById('url').value.trim());
-    if (!images.length) throw new Error('Hittade inga bilder i mappen.');
-    e.target.remove();
-    showNext();
+    const list = (await listImages()).sort();
+    if (list.join() !== [...images].sort().join()) {   // något har ändrats
+      images = list;
+      index = 0;
+    }
+    msg.textContent = images.length ? '' : 'Inga bilder i mappen.';
   } catch (err) {
-    msg.textContent = err.message;
+    if (!images.length) msg.textContent = 'Kunde inte hämta bilderna: ' + err.message;
   }
-});
+}
+
+refresh().then(showNext);
+setInterval(refresh, REFRESH * 60 * 1000);
 </script>
 </body>
 </html>
